@@ -70,9 +70,7 @@ def geocode_city_to_coordinates(city_name):
     except requests.exceptions.RequestException as e:
         print(f"Error in geocoding request: {e}")
         return None
-
 def get_route_from_openrouteservice(start_coords, end_coords):
-    # OpenRouteService API URL with coordinates
     url = f'https://api.openrouteservice.org/v2/directions/driving-car?api_key={OR_SERVICE_API_KEY}&start={start_coords[0]},{start_coords[1]}&end={end_coords[0]},{end_coords[1]}'
 
     try:
@@ -82,16 +80,14 @@ def get_route_from_openrouteservice(start_coords, end_coords):
 
         if 'features' in data and len(data['features']) > 0:
             route = data['features'][0]['geometry']['coordinates']
-            # Get the distance of the route in meters
-            distance = data['features'][0]['properties']['segments'][0]['distance'] / 1000  # Convert to kilometers
-            # Round distance to 2 decimal places
+            distance = data['features'][0]['properties']['segments'][0]['distance'] / 1000  # Convert to km
             distance = round(distance, 2)
 
-            # Assume speed of cargo truck (in km/h)
-            truck_speed = 70  # Example speed in km/h
+            # Get traffic data for speed adjustment
+            traffic_condition, speed = get_traffic_data(start_coords, end_coords)
 
-            # Calculate estimated time to reach (in hours)
-            estimated_time = distance / truck_speed  # Time in hours
+            # Calculate estimated time based on dynamic speed
+            estimated_time = distance / speed  # Time in hours
             estimated_time_minutes = estimated_time * 60  # Convert to minutes
 
             # Convert time to hr:min format
@@ -104,7 +100,8 @@ def get_route_from_openrouteservice(start_coords, end_coords):
     except requests.exceptions.RequestException as e:
         print(f"Error in route request: {e}")
         return None, None, None
-    
+
+
 def generate_map(route):
     # Create a map centered on the starting location
     start_lat, start_lon = route[0][1], route[0][0]  # Coordinates are in [lon, lat] format
@@ -154,6 +151,13 @@ def get_traffic_data(start_coords, end_coords):
     # Get traffic data from TomTom Traffic API
     traffic_url = f'https://api.tomtom.com/traffic/services/4/incidentDetails?key={TRAFFIC_API_KEY}&bbox={start_coords[0]},{start_coords[1]},{end_coords[0]},{end_coords[1]}&extended=true'
 
+    # Define speed based on traffic condition
+    speed_by_traffic = {
+        "High": 30,  # Speed in km/h for high traffic
+        "Moderate": 50,  # Speed in km/h for moderate traffic
+        "Low": 70,  # Speed in km/h for low traffic
+    }
+
     try:
         response = requests.get(traffic_url)
         response.raise_for_status()
@@ -162,29 +166,25 @@ def get_traffic_data(start_coords, end_coords):
         print("Traffic Data Response:", data)  # Debugging the response
 
         if data and 'incidents' in data:
-            traffic_condition = 'Moderate'  # Default if no incidents
-            estimated_time = 0  # Default estimated time
-
-            # Analyze traffic incidents
+            traffic_condition = "Moderate"  # Default traffic condition
             for incident in data['incidents']:
                 if incident['severity'] == 'high':
-                    traffic_condition = 'High'
-                    estimated_time += incident.get('duration', 0)  # Add duration of incidents
+                    traffic_condition = "High"
+                    break  # If high traffic is detected, use it immediately
+                elif incident['severity'] == 'low':
+                    traffic_condition = "Low"
 
-            # Default to 1 hour estimation if no incidents
-            estimated_time += 3600  # Add arbitrary 1 hour (3600 seconds)
+            # Determine the speed based on traffic condition
+            speed = speed_by_traffic.get(traffic_condition, 50)  # Default to 50 km/h if not found
 
-            # Convert time to minutes and then to hr:min format
-            estimated_time_minutes = estimated_time / 60
-            formatted_time = convert_minutes_to_hr_min(estimated_time_minutes)
-
-            return traffic_condition, formatted_time
+            return traffic_condition, speed
         else:
-            # If no incidents data, default to moderate traffic and a basic time estimate
-            return 'Moderate', "1h 0m"  # Default moderate condition and 1-hour estimated time in hr:min format
+            # If no incidents data, default to moderate traffic
+            return "Moderate", speed_by_traffic["Moderate"]
     except requests.exceptions.RequestException as e:
         print(f"Error in traffic request: {e}")
-        return 'Moderate', "1h 0m"  # Default to moderate traffic and 1-hour estimated time in case of error
+        return "Moderate", speed_by_traffic["Moderate"]  # Default to moderate traffic in case of error
+
 
 if __name__ == '__main__':
     app.run(debug=True)
